@@ -1,8 +1,8 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.6.0;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import '@openzeppelin/contracts/access/Ownable.sol';
+import '@openzeppelin/contracts/utils/ReentrancyGuard.sol';
 
 contract PassThroughWallet is Ownable, ReentrancyGuard {
   /// @notice Logs the address of the sender and amounts paid to the contract
@@ -13,7 +13,7 @@ contract PassThroughWallet is Ownable, ReentrancyGuard {
   // are better to avoid right now. Otherwise, I would not fit into my allotted 4-8 hours
 
   receive() external payable {
-    Paid(msg.sender, msg.value);
+    emit Paid(msg.sender, msg.value);
   }
 
   function withdraw(uint256 amount, address payable to)
@@ -22,10 +22,10 @@ contract PassThroughWallet is Ownable, ReentrancyGuard {
     nonReentrant
     returns (bool transferSuccess)
   {
-    require(address(this).balance >= amount, "insufficient balance");
+    require(address(this).balance >= amount, 'insufficient balance');
     to.transfer(amount);
 
-    Withdraw(to, amount);
+    emit Withdraw(to, amount);
 
     transferSuccess = true;
   }

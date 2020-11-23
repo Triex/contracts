@@ -1,64 +1,56 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.6.0;
+pragma experimental ABIEncoderV2;
 
-import "@openzeppelin/contracts/token/ERC721/IERC721Metadata.sol";
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/utils/Counters.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@chainlink/contracts/src/v0.6/VRFConsumerBase.sol";
+import '@openzeppelin/contracts/token/ERC721/IERC721Metadata.sol';
+import '@openzeppelin/contracts/token/ERC721/ERC721.sol';
+import '@openzeppelin/contracts/token/ERC20/ERC20.sol';
+import '@openzeppelin/contracts/utils/Counters.sol';
+import '@openzeppelin/contracts/utils/ReentrancyGuard.sol';
+import '@openzeppelin/contracts/access/Ownable.sol';
+
+import './TemplatesRegistry.sol';
+import './IntooTVRoyalty.sol';
 
 // TODO: had to remove safeMath in require checks. add back
 
-contract TicketFactory is
-  IERC721Metadata,
-  ERC721,
-  Ownable,
-  ReentrancyGuard,
-  VRFConsumerBase
-{
-  using SafeERC20 for ERC20;
+contract TicketFactory is IERC721Metadata, ERC721, Ownable, ReentrancyGuard {
   using Counters for Counters.Counter;
 
-  address public xpToken; // this is the ERC20 address of our XP token
-  address public xpCollector; // when guest pays for ticket, XP tokens get sent here
   Counters.Counter private tokenIds; // to keep track of the number of NFTs we have minted
 
-  // if you are wondering how you can call functions that use Solidity enums,
-  // then these enums get converted into uint. So twoMins is 0, fiveMins is 1 and so on
-  enum Duration {twoMins, fiveMins, tenMins}
-
   mapping(uint256 => bool) public expiredExperience;
+  mapping(uint256 => uint256) public ticketsToCards;
+  mapping(uint256 => uint256) public cardsToTemplates;
 
-  // chainlink related
-  bytes32 internal keyHash;
-  uint256 internal fee;
-  uint256 public randomResult;
+  event TicketCreated(
+    uint256 ticketId,
+    address ticketCreator,
+    string props,
+    int256 templateIndex
+  );
+  event ExperienceMatchingCreated(
+    uint256 ticketId,
+    address host,
+    address guest,
+    uint256 hostExperienceAccessId,
+    uint256 guestExperienceAccessId
+  );
+  event ExperienceEnded(uint256 experienceId);
+  event PayoutSent(address addressToPay, uint256 amountToPay);
 
-  // we have xpCollector that later distributes the Host's reward share so
+  TemplatesRegistry public templatesRegistry;
+  IntooTVRoyalty public royaltiesToken;
+
+  // we have xpCollector that later distributes the Host"s reward share so
   // that noone tries to hack us by calling functions that redirect the reward
   // to them. We control where it goes at all times
-  constructor(
-    address _xpToken,
-    address _xpCollector,
-    string memory _name,
-    string memory _symbol
-  )
+  constructor(string memory _name, string memory _symbol)
     public
     ERC721(_name, _symbol)
-    VRFConsumerBase(
-      0xdD3782915140c8f3b190B5D67eAc6dc5760C46E9, // VRF Coordinator
-      0xa36085F69e2889c224210F603D836748e7dC0088 // LINK Token
-    )
   {
-    xpToken = _xpToken;
-    // we avoid directly sending them the host the xp tokens
-    xpCollector = _xpCollector;
-
-    keyHash = 0x6c3699283bda56ad74f6b855546325b68d482e983852a7a82979cc4807b641f4;
-    fee = 0.1 * 10**18; // 0.1 LINK
+    templatesRegistry = new TemplatesRegistry();
+    royaltiesToken = new IntooTVRoyalty(100000000);
   }
 
   // this function is responsible for minting the ticket NFT
@@ -69,39 +61,42 @@ contract TicketFactory is
   // 3. description
   // 4. duration (enum Duration)
   // find the schema definition to conform to here: https://eips.ethereum.org/EIPS/eip-721
-  function createTicket(Duration _duration, string memory _props)
-    external
-    payable
-    nonReentrant
-    returns (uint256)
-  {
-    address _ticketCreator = msg.sender;
-    uint256 balanceBefore = ERC20(xpToken).balanceOf(xpCollector);
-    uint256 balanceAfter;
+  function createTicket(
+    string memory _props,
+    int256 _templateIndex,
+    bool _saveAsTemplate
+  ) external payable nonReentrant returns (uint256) {
+    if (_templateIndex > 0 && _saveAsTemplate == true)
+      revert("You can't save a card as a template if it's already a template");
 
-    if (_duration == Duration.twoMins) {
-      ERC20(xpToken).safeTransferFrom(_ticketCreator, xpCollector, 2 * 1e18);
-      balanceAfter = ERC20(xpToken).balanceOf(xpCollector);
-      require(balanceAfter - balanceBefore == 2 * 1e18, "failed transaction");
-    } else if (_duration == Duration.fiveMins) {
-      ERC20(xpToken).safeTransferFrom(_ticketCreator, xpCollector, 5 * 1e18);
-      balanceAfter = ERC20(xpToken).balanceOf(xpCollector);
-      require(balanceAfter - balanceBefore == 5 * 1e18, "failed transaction");
-    } else if (_duration == Duration.tenMins) {
-      ERC20(xpToken).safeTransferFrom(_ticketCreator, xpCollector, 10 * 1e18);
-      balanceAfter = ERC20(xpToken).balanceOf(xpCollector);
-      require(balanceAfter - balanceBefore == 10 * 1e18, "failed transaction");
-    } else {
-      require(false, "exhaustive check");
-    }
+    address _ticketCreator = msg.sender;
 
     tokenIds.increment();
     uint256 newItemId = tokenIds.current();
 
     _mint(_ticketCreator, newItemId);
-    // we will also need another function to support calling this setTokenURI to be
-    // able to set the vrf hash to generate the QR code
-    _setTokenURI(newItemId, _props);
+
+    if (_templateIndex <= 0) {
+      _setTokenURI(newItemId, _props);
+    } else if (
+      uint256(_templateIndex) < templatesRegistry.getNumOfTemplates()
+    ) {
+      (, string memory props) = templatesRegistry.experienceTemplates(
+        uint256(_templateIndex)
+      );
+
+      _setTokenURI(newItemId, props);
+
+      cardsToTemplates[newItemId] = uint256(_templateIndex);
+    } else {
+      revert('Invalid template index provided');
+    }
+
+    if (_saveAsTemplate == true) {
+      templatesRegistry.createTicketTemplate(msg.sender, _props);
+    }
+
+    emit TicketCreated(newItemId, _ticketCreator, _props, _templateIndex);
 
     return newItemId;
   }
@@ -119,54 +114,67 @@ contract TicketFactory is
     string memory _props,
     address host
   ) external nonReentrant returns (bool) {
-    require(_ticketId < tokenIds.current(), "no such experience token");
-    require(expiredExperience[_ticketId] == false, "experience expired");
+    require(_ticketId < tokenIds.current(), 'no such experience token');
+    require(expiredExperience[_ticketId] == false, 'experience expired');
 
-    _mint(host, 1);
+    tokenIds.increment();
+    uint256 hostItemId = tokenIds.current();
+    tokenIds.increment();
+    uint256 guestItemId = tokenIds.current();
+
+    _mint(host, hostItemId);
     // this is the original creator of the ticket
-    _mint(ownerOf(_ticketId), 2);
+    _mint(ownerOf(_ticketId), guestItemId);
+
+    ticketsToCards[guestItemId] = _ticketId;
 
     // right now the properties are the same for both the guest and the host
     // we may want to change this in the future
     // also, it is not quite economically sensible to mint two NFTs. After all,
     // the creator of the original ticket can use that as authorization
     // from collectible pov, it makes sense to mint two NFTs here
-    _setTokenURI(1, _props);
-    _setTokenURI(2, _props);
+    _setTokenURI(hostItemId, _props);
+    _setTokenURI(guestItemId, _props);
+
+    emit ExperienceMatchingCreated(
+      _ticketId,
+      host,
+      ownerOf(_ticketId),
+      hostItemId,
+      guestItemId
+    );
 
     return true;
   }
 
-  /**
-   * Requests randomness from a user-provided seed
-   */
-  function getRandomNumber(uint256 userProvidedSeed)
-    public
-    returns (bytes32 requestId)
-  {
+  function expireExperience(uint256 _ticketId) external nonReentrant {
+    require(_ticketId < tokenIds.current(), 'no such experience token');
     require(
-      LINK.balanceOf(address(this)) > fee,
-      "Not enough LINK - fill contract with faucet"
+      expiredExperience[_ticketId] == false,
+      'experience already expired'
     );
-    return requestRandomness(keyHash, fee, userProvidedSeed);
+    require(
+      ownerOf(_ticketId) == msg.sender,
+      'Only owner of NFT can expire it'
+    );
+
+    expiredExperience[_ticketId] = true;
+
+    if (cardsToTemplates[ticketsToCards[_ticketId]] != 0) {
+      (address creator, ) = templatesRegistry.experienceTemplates(
+        cardsToTemplates[ticketsToCards[_ticketId]]
+      );
+      _payout(creator, 1 * 1e18);
+    }
+
+    emit ExperienceEnded(_ticketId);
   }
 
-  /**
-   * Callback function used by VRF Coordinator
-   */
-  function fulfillRandomness(bytes32 requestId, uint256 randomness)
-    internal
-    override
-  {
-    randomResult = randomness;
+  // This same contract is used as a treasury: DAI are sent to this contract which are
+  // in turn sent as royalties to templates creators
+  function _payout(address _addressToPay, uint256 _amountToPay) internal {
+    royaltiesToken.transfer(_addressToPay, _amountToPay);
+
+    emit PayoutSent(_addressToPay, _amountToPay);
   }
 }
-
-// process for chainlink
-// 1. deploy this contract from an address that has sufficient ether on Kovan (you may ned to use faucet for this)
-// 2. get some LINK on Kovan (also faucet)
-// 3. send some LINK to this address, since it needs to pay 0.1 LINK per each request
-// 4. call getRandomNumber from outside with some of your entropy
-// 5. make a call to randomResult in the **NEXT BLOCK**
-// 6. use keccak256 or other hashing algorithm to get a hash from 5
-// 7. use this hash as a QR code for the event (since we are React Native, where would we use this URL though?)
