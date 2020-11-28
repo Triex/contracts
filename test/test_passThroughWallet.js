@@ -1,73 +1,101 @@
-var assert = require("assert");
-const {convertTypeAcquisitionFromJson} = require("typescript");
-const {default: Web3} = require("web3");
+var assert = require('assert');
 
-const PassThroughWallet = artifacts.require("PassThroughWallet.sol");
+const { RelayProvider, resolveConfigurationGSN } = require('@opengsn/gsn');
 
-contract("PassThroughWallet", ([owner, ...accounts]) => {
+const paymasterAddress = process.env.GSN_PAYMASTER_ADDRESS;
+const trustedForwarderAddress = process.env.GSN_FORWARDER_ADDRESS;
+
+const Web3 = require('web3');
+const { waitForEvent } = require('./utils');
+let web3 = new Web3(
+  new Web3.providers.WebsocketProvider('ws://localhost:8545')
+);
+
+const PassThroughWallet = artifacts.require('PassThroughWallet.sol');
+
+contract('PassThroughWallet', ([owner, ...accounts]) => {
+  let contractEvents;
+
+  before(async () => {
+    const configuration = await resolveConfigurationGSN(web3.currentProvider, {
+      paymasterAddress,
+    });
+
+    const gsnProvider = new RelayProvider(web3.currentProvider, configuration);
+    web3 = new Web3(gsnProvider);
+  });
+
   beforeEach(async () => {
     this.passThroughWalletCreator = accounts[0];
-    this.wallet = await PassThroughWallet.new();
+    this.wallet = await PassThroughWallet.new(trustedForwarderAddress);
 
-    await web3.eth.sendTransaction({
-      from: accounts[1],
-      to: this.wallet.address,
-      value: web3.utils.toWei("1", "ether")
+    const { events } = new web3.eth.Contract(
+      this.wallet.abi,
+      this.wallet.address
+    );
+
+    contractEvents = events;
+
+    // await web3.eth.sendTransaction({
+    //   from: accounts[1],
+    //   to: this.wallet.address,
+    //   value: web3.utils.toWei('1', 'ether'),
+    // });
+  });
+
+  // it('stores eth', async () => {
+  //   const walletBalance = await web3.eth.getBalance(this.wallet.address);
+  //   assert.strictEqual(
+  //     walletBalance.toString(),
+  //     web3.utils.toWei('1', 'ether')
+  //   );
+  // });
+
+  it("doesn't withdraw correctly if requested withdrawal balance is > than actual balance", async () => {
+    await this.wallet.requestWithdrawal(100, {
+      from: accounts[0],
     });
-  });
 
-  it("stores eth", async () => {
-    const walletBalance = await web3.eth.getBalance(this.wallet.address);
+    const currBlock = await web3.eth.getBlock('latest');
+
+    const withdrawErrEvent = await waitForEvent(
+      contractEvents.LogProvableQueryCallbackError,
+      currBlock.number
+    );
+
     assert.strictEqual(
-      walletBalance.toString(),
-      web3.utils.toWei("1", "ether")
+      withdrawErrEvent.returnValues.description,
+      "Requested withdrawal is higher than requestors' balance"
     );
   });
 
-  it("does not allow non-owners to withdraw", async () => {
-    const walletBalance = await web3.eth.getBalance(this.wallet.address);
-    assert.strictEqual(
-      walletBalance.toString(),
-      web3.utils.toWei("1", "ether")
-    );
+  // Commented for now because it transfers DAI, not available on ganache-cli
+
+  // it('withdraws correctly if requested withdrawal balance is <= than actual balance', async () => {
+  //   await this.wallet.requestWithdrawal(5, {
+  //     from: accounts[0],
+  //   });
+
+  //   const currBlock = await web3.eth.getBlock('latest');
+
+  //   const withdrawOkEvent = await waitForEvent(
+  //     contractEvents.LogProvableQueryCallbackResult,
+  //     currBlock.number
+  //   );
+
+  //   assert.strictEqual(withdrawOkEvent.returnValues.requestor, accounts[0]);
+  //   assert.strictEqual(withdrawOkEvent.returnValues.requestorBalance, 10);
+  //   assert.strictEqual(withdrawOkEvent.returnValues.amountRequested, 5);
+  // });
+
+  it("doesn't withdraw if requested twice or more in a day", async () => {
     try {
-      await this.wallet.withdraw("1000000", accounts[1], {from: accounts[1]});
-    } catch (e) {
-      assert.strictEqual(e.reason, "Ownable: caller is not the owner");
-    }
-  });
-
-  it("allows owner to withdraw", async () => {
-    const walletBalance = await web3.eth.getBalance(this.wallet.address);
-    assert.strictEqual(
-      walletBalance.toString(),
-      web3.utils.toWei("1", "ether").toString()
-    );
-
-    await this.wallet.withdraw(
-      String(web3.utils.toWei("0.6", "ether")),
-      accounts[0]
-    );
-    assert.strictEqual(
-      await web3.eth.getBalance(this.wallet.address),
-      web3.utils.toWei("0.4", "ether")
-    );
-  });
-
-  it("does not allow to withdraw more than there is", async () => {
-    const walletBalance = await web3.eth.getBalance(this.wallet.address);
-    assert.strictEqual(
-      walletBalance.toString(),
-      web3.utils.toWei("1", "ether").toString()
-    );
-
-    try {
-      await this.wallet.withdraw(
-        String(web3.utils.toWei("1.01", "ether")),
-        accounts[0]
-      );
-    } catch (e) {
-      assert.strictEqual(e.reason, "insufficient balance");
-    }
+      await this.wallet.requestWithdrawal(100, {
+        from: accounts[0],
+      });
+      await this.wallet.requestWithdrawal(100, {
+        from: accounts[0],
+      });
+    } catch {}
   });
 });
