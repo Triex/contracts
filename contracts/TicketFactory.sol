@@ -60,7 +60,7 @@ contract TicketFactory is BaseRelayRecipient, Ownable, IERC721Metadata, ERC721, 
     trustedForwarder = _forwarder;
       
     templatesRegistry = new TemplatesRegistry();
-    royaltiesToken = new IntooTVRoyalty(100000000);
+    royaltiesToken = new IntooTVRoyalty(500);
   }
 
       /**
@@ -137,13 +137,18 @@ contract TicketFactory is BaseRelayRecipient, Ownable, IERC721Metadata, ERC721, 
     } else if (
       uint256(_templateIndex) < templatesRegistry.getNumOfTemplates()
     ) {
-      (, string memory props) = templatesRegistry.experienceTemplates(
+      (address creator, string memory props) = templatesRegistry.experienceTemplates(
         uint256(_templateIndex)
       );
 
       _setTokenURI(newItemId, props);
 
       cardsToTemplates[newItemId] = uint256(_templateIndex);
+
+      if(templatesRegistry.templateUsages(uint256(_templateIndex)) < 5)
+        _payout(creator, 1 * 1e18);
+
+      templatesRegistry.incrementTemplateUsage(uint256(_templateIndex));
     } else {
       revert('Invalid template index provided');
     }
@@ -215,13 +220,6 @@ contract TicketFactory is BaseRelayRecipient, Ownable, IERC721Metadata, ERC721, 
     );
 
     expiredExperience[_ticketId] = true;
-
-    if (cardsToTemplates[ticketsToCards[_ticketId]] != 0) {
-      (address creator, ) = templatesRegistry.experienceTemplates(
-        cardsToTemplates[ticketsToCards[_ticketId]]
-      );
-      _payout(creator, 1 * 1e18);
-    }
 
     emit ExperienceEnded(_ticketId);
   }

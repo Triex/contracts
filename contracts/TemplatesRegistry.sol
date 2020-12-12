@@ -5,11 +5,15 @@ pragma experimental ABIEncoderV2;
 import '@openzeppelin/contracts/token/ERC20/ERC20.sol';
 import '@openzeppelin/contracts/utils/ReentrancyGuard.sol';
 import '@openzeppelin/contracts/access/Ownable.sol';
+import '@openzeppelin/contracts/math/SafeMath.sol';
 
 contract TemplatesRegistry is Ownable, ReentrancyGuard {
+  using SafeMath for uint256;
+
   mapping(uint256 => bool) public expiredExperience;
   mapping(uint256 => uint256) public ticketsToCards;
   mapping(uint256 => uint256) public cardsToTemplates;
+  mapping(uint256 => uint256) public templateUsages;
 
   struct ExperienceTemplate {
     address creator;
@@ -66,5 +70,9 @@ contract TemplatesRegistry is Ownable, ReentrancyGuard {
     experienceTemplates.push(expTemp);
 
     return experienceTemplates.length - 1;
+  }
+
+  function incrementTemplateUsage(uint256 _templateId) external onlyOwner {
+    templateUsages[_templateId] = templateUsages[_templateId].add(1);
   }
 }

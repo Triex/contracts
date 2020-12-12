@@ -3,7 +3,11 @@
   "license": "MIT",
   "scripts": {
     "prettier:solidity": "./node_modules/.bin/prettier --write contracts/**/*.sol",
-    "test": "yarn truffle test"
+    "test": "yarn truffle test",
+    "deploy-matic": "dotenv npm run run:deploy-matic",
+    "run:deploy-matic": "truffle deploy --network matic",
+    "deploy-xdai": "dotenv npm run run:deploy-xdai",
+    "run:deploy-xdai": "truffle deploy --network xdai"
   },
   "dependencies": {
     "@chainlink/contracts": "^0.0.10",
@@ -25,6 +29,7 @@
   "devDependencies": {
     "@loopback/build": "^6.2.4",
     "dotenv": "^8.2.0",
+    "dotenv-cli": "^4.0.0",
     "husky": "^4.3.0",
     "lint-staged": "^10.4.0",
     "prettier": "^2.1.2",
